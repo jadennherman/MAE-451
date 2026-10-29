@@ -1,0 +1,199 @@
+# /Users/jadenherman/software/MAE-451/Project1/caps_run/Scratch/capsRestart.cpc written by ocsmSave (v1.29)
+
+# Constant, Design, and Output Parameters:
+DESPMTR   wing_area       0.60000
+DESPMTR   wing_AR       8.00000
+DESPMTR   fus_length       1.20000
+DESPMTR   fus_FR       8.00000
+DESPMTR   wing_x       0.40100
+DESPMTR   esc_x       0.13000
+DESPMTR   batt_x       0.22000
+DESPMTR   rx_x       0.31000
+OUTPMTR   wing_span
+OUTPMTR   wing_chord
+OUTPMTR   fus_diameter
+OUTPMTR   fus_radius
+OUTPMTR   ht_area
+OUTPMTR   ht_span
+OUTPMTR   ht_chord
+OUTPMTR   ht_x
+OUTPMTR   vt_area
+OUTPMTR   vt_height
+OUTPMTR   vt_root_chord
+OUTPMTR   vt_tip_chord
+OUTPMTR   vt_sweep_offset
+OUTPMTR   vt_x
+OUTPMTR   noseV
+OUTPMTR   nosecg
+OUTPMTR   noseSwet
+OUTPMTR   fuseV
+OUTPMTR   fusecg
+OUTPMTR   fuseSwet
+OUTPMTR   wingV
+OUTPMTR   wingcg
+OUTPMTR   wingSwet
+OUTPMTR   htailV
+OUTPMTR   htailcg
+OUTPMTR   htailSwet
+OUTPMTR   vtailV
+OUTPMTR   vtailcg
+OUTPMTR   vtailSwet
+OUTPMTR   motorcg
+OUTPMTR   propcg
+OUTPMTR   escV
+OUTPMTR   esccg
+OUTPMTR   battV
+OUTPMTR   battcg
+OUTPMTR   rxV
+OUTPMTR   rxcg
+OUTPMTR   servoV
+OUTPMTR   ail_left_cg
+OUTPMTR   ail_right_cg
+OUTPMTR   elev_cg
+OUTPMTR   rud_cg
+
+# Global Attributes:
+
+# Branches:
+SET       wing_span sqrt(wing_area*wing_AR)
+SET       wing_chord wing_area/wing_span
+SET       fus_diameter fus_length/fus_FR
+SET       fus_radius fus_diameter/2
+SET       nose_length 0.12
+SKBEG     0   0   0   0
+   SPLINE    0.25*nose_length   0.661438*fus_radius   0
+   SPLINE    0.50*nose_length   0.866025*fus_radius   0
+   SPLINE    0.75*nose_length   0.968246*fus_radius   0
+   SPLINE    nose_length   fus_radius   0
+   LINSEG    nose_length   0   0
+   LINSEG    0   0   0
+SKEND     0
+REVOLVE   0   0   0   1   0   0   360
+SET       noseV @volume
+SET       nosecg @xcg
+SET       noseSwet @area
+CYLINDER  nose_length   0   0   fus_length   0   0   fus_radius
+SET       fuseV @volume
+SET       fusecg @xcg
+SET       fuseSwet @area
+MARK
+UDPRIM    naca   Series   2412   sharpte   1
+ROTATEX   90   0   0
+SCALE     wing_chord   0   0   0
+TRANSLATE wing_x   (-wing_span/2)   0.035
+UDPRIM    naca   Series   2412   sharpte   1
+ROTATEX   90   0   0
+SCALE     wing_chord   0   0   0
+TRANSLATE wing_x   0   0.035
+UDPRIM    naca   Series   2412   sharpte   1
+ROTATEX   90   0   0
+SCALE     wing_chord   0   0   0
+TRANSLATE wing_x   (wing_span/2)   0.035
+RULE      0   0   0
+SET       wingV @volume
+SET       wingcg @xcg
+SET       wingSwet @area
+SET       ht_area wing_chord*wing_area/fus_length
+SET       ht_AR 3
+SET       ht_span sqrt(ht_area*ht_AR)
+SET       ht_chord ht_area/ht_span
+SET       ht_x fus_length-1.5*ht_chord
+SET       ht_z 0.035
+MARK
+UDPRIM    naca   Series   0010   sharpte   1
+ROTATEX   90   0   0
+SCALE     ht_chord   0   0   0
+TRANSLATE ht_x   (-ht_span/2)   ht_z
+UDPRIM    naca   Series   0010   sharpte   1
+ROTATEX   90   0   0
+SCALE     ht_chord   0   0   0
+TRANSLATE ht_x   0   ht_z
+UDPRIM    naca   Series   0010   sharpte   1
+ROTATEX   90   0   0
+SCALE     ht_chord   0   0   0
+TRANSLATE ht_x   (ht_span/2)   ht_z
+RULE      0   0   0
+SET       htailV @volume
+SET       htailcg @xcg
+SET       htailSwet @area
+SET       vt_area 0.08*wing_span*wing_area/fus_length
+SET       vt_AR 1.5
+SET       vt_taper 0.7
+SET       vt_sweep 30
+SET       vt_height sqrt(vt_area*vt_AR)
+SET       vt_root_chord 2*vt_area/(vt_height*(1+vt_taper))
+SET       vt_tip_chord vt_taper*vt_root_chord
+SET       vt_sweep_offset vt_height*tand(vt_sweep)
+SET       vt_x fus_length-vt_sweep_offset-vt_tip_chord
+SET       vt_z fus_radius
+MARK
+UDPRIM    naca   Series   0010   sharpte   1
+SCALE     vt_root_chord   0   0   0
+TRANSLATE vt_x   0   vt_z
+UDPRIM    naca   Series   0010   sharpte   1
+SCALE     vt_tip_chord   0   0   0
+TRANSLATE (vt_x+vt_sweep_offset)   0   (vt_z+vt_height)
+RULE      0   0   0
+SET       vtailV @volume
+SET       vtailcg @xcg
+SET       vtailSwet @area
+SET       motor_length 0.0445
+SET       motor_radius 0.0142
+SET       prop_radius 0.1016
+SET       prop_hub_radius 0.01016
+SET       prop_hub_thickness 0.01143
+SET       esc_L 0.086
+SET       esc_W 0.038
+SET       esc_H 0.012
+SET       batt_L 0.1310
+SET       batt_W 0.0435
+SET       batt_H 0.0290
+SET       rx_L 0.043
+SET       rx_W 0.025
+SET       rx_H 0.015
+SET       servo_xdim 0.0298
+SET       servo_thickness 0.0120
+SET       servo_longdim 0.0296
+CYLINDER  (-motor_length)   0   0   0   0   0   motor_radius
+SET       motorcg @xcg
+CYLINDER  (-motor_length-prop_hub_thickness)   0   0   (-motor_length)   0   0   prop_hub_radius
+SET       propcg -motor_length-prop_hub_thickness/2
+SET       prop_blade_width 0.018
+SET       prop_blade_thickness 0.003
+BOX       (-motor_length-prop_hub_thickness-prop_blade_thickness)   (-prop_blade_width/2)   (-prop_radius)   prop_blade_thickness   prop_blade_width   (2*prop_radius)
+BOX       esc_x   (-esc_W/2)   (-esc_H/2)   esc_L   esc_W   esc_H
+SET       escV @volume
+SET       esccg @xcg
+BOX       batt_x   (-batt_W/2)   (-batt_H/2)   batt_L   batt_W   batt_H
+SET       battV @volume
+SET       battcg @xcg
+BOX       rx_x   (-rx_W/2)   (-rx_H/2)   rx_L   rx_W   rx_H
+SET       rxV @volume
+SET       rxcg @xcg
+SET       ail_servo_center_x wing_x+0.70*wing_chord
+SET       ail_servo_x ail_servo_center_x-servo_xdim/2
+SET       ail_servo_y_left -0.35*wing_span
+SET       ail_servo_y_right 0.35*wing_span
+SET       ail_servo_z 0.035
+BOX       ail_servo_x   (ail_servo_y_left-servo_longdim/2)   ail_servo_z   servo_xdim   servo_longdim   servo_thickness
+SET       servoV @volume
+SET       ail_left_cg @xcg
+BOX       ail_servo_x   (ail_servo_y_right-servo_longdim/2)   ail_servo_z   servo_xdim   servo_longdim   servo_thickness
+SET       ail_right_cg @xcg
+SET       elev_servo_center_x ht_x+0.65*ht_chord
+SET       elev_servo_x elev_servo_center_x-servo_xdim/2
+SET       elev_servo_y 0.15*ht_span
+SET       elev_servo_z ht_z
+BOX       elev_servo_x   (elev_servo_y-servo_longdim/2)   elev_servo_z   servo_xdim   servo_longdim   servo_thickness
+SET       elev_cg @xcg
+SET       rud_servo_height_fraction 0.20
+SET       rud_servo_LE_x vt_x+rud_servo_height_fraction*vt_sweep_offset
+SET       rud_servo_local_chord vt_root_chord+rud_servo_height_fraction*(vt_tip_chord-vt_root_chord)
+SET       rud_servo_center_x rud_servo_LE_x+0.65*rud_servo_local_chord
+SET       rud_servo_x rud_servo_center_x-servo_xdim/2
+SET       rud_servo_y 0
+SET       rud_servo_z vt_z+rud_servo_height_fraction*vt_height
+BOX       rud_servo_x   rud_servo_y   rud_servo_z   servo_xdim   servo_thickness   servo_longdim
+SET       rud_cg @xcg
+
+END

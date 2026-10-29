@@ -1273,3 +1273,176 @@ plt.savefig(
 )
 
 plt.close()
+
+# ============================================================
+# STEP 8 - WING STRUCTURAL LIMIT
+# ============================================================
+
+# Foam ultimate strengths
+sigma_tensile = 140e3       # Pa
+sigma_compressive = 100e3   # Pa
+
+# Lower bending allowable governs
+sigma_allow = min(
+    sigma_tensile,
+    sigma_compressive
+)
+
+# NACA 2412 normalized bending moment of inertia
+I_norm_2412 = 6.84e-5
+
+# Wing geometry
+b = outpmtr("wing_span")
+c_wing = outpmtr("wing_chord")
+
+# Actual section moment of inertia
+I_wing = (
+    I_norm_2412
+    * c_wing**4
+)
+
+# Maximum distance from neutral axis
+# NACA 2412 is 12% thick -> half thickness = 0.06c
+c_bending = (
+    0.06
+    * c_wing
+)
+
+# Elliptical half-wing lift resultant location
+y_lift = (
+    4.0*b
+    / (6.0*np.pi)
+)
+
+# ------------------------------------------------------------
+# ROOT BENDING MOMENT
+#
+# Total lift in a level turn:
+# L = nW
+#
+# One wing carries:
+# L_half = nW/2
+#
+# Root moment:
+# M_root = (nW/2)*y_lift
+#
+# Bending stress:
+# sigma = M*c/I
+# ------------------------------------------------------------
+
+root_moment_1g = (
+    (W/2.0)
+    * y_lift
+)
+
+stress_1g = (
+    root_moment_1g
+    * c_bending
+    / I_wing
+)
+
+# Solve sigma_allow = n * stress_1g
+n_structural_max = (
+    sigma_allow
+    / stress_1g
+)
+
+
+# ------------------------------------------------------------
+# MAXIMUM BANK ANGLE
+#
+# Level coordinated turn:
+#
+# n = 1/cos(phi)
+# ------------------------------------------------------------
+
+if n_structural_max >= 1.0:
+
+    phi_structural_max = (
+        np.degrees(
+            np.arccos(
+                1.0/n_structural_max
+            )
+        )
+    )
+
+    structural_feasible = True
+
+else:
+
+    phi_structural_max = np.nan
+    structural_feasible = False
+
+
+# ============================================================
+# STEP 8 OUTPUT
+# ============================================================
+
+print()
+print("="*72)
+print("STEP 8 - WING STRUCTURAL LIMIT")
+print("="*72)
+
+print(
+    f"Wing span:                   "
+    f"{b:.4f} m"
+)
+
+print(
+    f"Wing chord:                  "
+    f"{c_wing:.4f} m"
+)
+
+print(
+    f"Bending moment of inertia:   "
+    f"{I_wing:.6e} m^4"
+)
+
+print(
+    f"Half-wing lift arm:          "
+    f"{y_lift:.4f} m"
+)
+
+print(
+    f"1-g root bending moment:     "
+    f"{root_moment_1g:.4f} N*m"
+)
+
+print(
+    f"1-g bending stress:          "
+    f"{stress_1g/1000:.2f} kPa"
+)
+
+print(
+    f"Allowable bending stress:    "
+    f"{sigma_allow/1000:.2f} kPa"
+)
+
+print(
+    f"Maximum structural load n:   "
+    f"{n_structural_max:.3f}"
+)
+
+if structural_feasible:
+
+    print(
+        f"Maximum structural bank:     "
+        f"{phi_structural_max:.2f} deg"
+    )
+
+else:
+
+    print(
+        "Maximum structural bank:     N/A"
+    )
+
+    print(
+        "STRUCTURAL CHECK:             FAILS BELOW 1 g"
+    )
+
+    print(
+        "The baseline wing cannot support "
+        "steady level flight under the stated "
+        "foam properties and beam model."
+    )
+

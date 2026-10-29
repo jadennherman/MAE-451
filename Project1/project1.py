@@ -1446,3 +1446,393 @@ else:
         "foam properties and beam model."
     )
 
+# ============================================================
+# STEP 9 - DESIGN TRADE STUDY
+# ============================================================
+
+wing_areas = [
+    0.25,
+    0.60,
+    1.00
+]
+
+aspect_ratios = [
+    2.0,
+    5.0,
+    8.0
+]
+
+trade_results = []
+
+
+def structural_model(weight):
+
+    b = outpmtr("wing_span")
+    c = outpmtr("wing_chord")
+
+    I = (
+        6.84e-5
+        * c**4
+    )
+
+    c_bending = (
+        0.06
+        * c
+    )
+
+    y_lift = (
+        4.0*b
+        / (6.0*np.pi)
+    )
+
+    M_1g = (
+        (weight/2.0)
+        * y_lift
+    )
+
+    stress_1g = (
+        M_1g
+        * c_bending
+        / I
+    )
+
+    sigma_allow = 100e3
+
+    n_max = (
+        sigma_allow
+        / stress_1g
+    )
+
+    return n_max
+
+
+def endurance_model(weight):
+
+    S = despmtr("wing_area")
+
+    V_stall = np.sqrt(
+        2.0*weight
+        /
+        (
+            rho_sl
+            * S
+            * CL_max
+        )
+    )
+
+    V_test = np.linspace(
+        V_stall,
+        49.0,
+        2000
+    )
+
+    aero = aero_model(
+        V_test,
+        weight,
+        rho_sl
+    )
+
+    power_flight = (
+        aero["drag"]
+        * V_test
+    )
+
+    i_best = np.argmin(
+        power_flight
+    )
+
+    V_best = (
+        V_test[i_best]
+    )
+
+    P_best = (
+        power_flight[i_best]
+    )
+
+    P_battery = (
+        P_best
+        / powertrain_efficiency
+    )
+
+    endurance_sec = (
+        battery_energy_J
+        / P_battery
+    )
+
+    return (
+        V_best,
+        endurance_sec/60.0
+    )
+
+
+def level_flight_feasible(weight):
+
+    S = despmtr("wing_area")
+
+    V_stall = np.sqrt(
+        2.0*weight
+        /
+        (
+            rho_sl
+            * S
+            * CL_max
+        )
+    )
+
+    V_test = np.linspace(
+        V_stall,
+        49.0,
+        1500
+    )
+
+    aero = aero_model(
+        V_test,
+        weight,
+        rho_sl
+    )
+
+    thrust = propulsion_model(
+        V_test,
+        1.0,
+        rho_sl
+    )["thrust"]
+
+    return np.any(
+        thrust >= aero["drag"]
+    )
+
+
+print()
+print("="*90)
+print("STEP 9 - WING AREA / ASPECT RATIO TRADE STUDY")
+print("="*90)
+
+
+for S_trade in wing_areas:
+
+    for AR_trade in aspect_ratios:
+
+        # Change OpenCSM design parameters
+        plane.despmtr[
+            "wing_area"
+        ].value = S_trade
+
+        plane.despmtr[
+            "wing_AR"
+        ].value = AR_trade
+
+        # OpenCSM geometry updates automatically
+        trade_weights = (
+            weights_model()
+        )
+
+        trade_mass = (
+            trade_weights["mass"]
+        )
+
+        trade_weight = (
+            trade_weights["weight"]
+        )
+
+        trade_cg = (
+            trade_weights[
+                "cg_percent"
+            ]
+        )
+
+        V_endurance, endurance_min = (
+            endurance_model(
+                trade_weight
+            )
+        )
+
+        n_max_trade = (
+            structural_model(
+                trade_weight
+            )
+        )
+
+        cg_ok = (
+            25.0
+            <= trade_cg
+            <= 50.0
+        )
+
+        structure_ok = (
+            n_max_trade
+            >= 1.0
+        )
+
+        flight_ok = (
+            level_flight_feasible(
+                trade_weight
+            )
+        )
+
+        feasible = (
+            cg_ok
+            and structure_ok
+            and flight_ok
+        )
+
+        trade_results.append(
+            {
+                "S": S_trade,
+                "AR": AR_trade,
+                "mass": trade_mass,
+                "cg": trade_cg,
+                "V_end": V_endurance,
+                "endurance": endurance_min,
+                "n_max": n_max_trade,
+                "cg_ok": cg_ok,
+                "structure_ok": structure_ok,
+                "flight_ok": flight_ok,
+                "feasible": feasible
+            }
+        )
+
+
+# ============================================================
+# PRINT TRADE TABLE
+# ============================================================
+
+print()
+
+print(
+    f"{'S':>6}"
+    f"{'AR':>6}"
+    f"{'Mass':>10}"
+    f"{'CG %c':>10}"
+    f"{'V_end':>10}"
+    f"{'End min':>12}"
+    f"{'n_max':>10}"
+    f"{'CG':>8}"
+    f"{'Struct':>9}"
+    f"{'Flight':>9}"
+    f"{'Feasible':>11}"
+)
+
+print("-"*101)
+
+for r in trade_results:
+
+    print(
+        f"{r['S']:6.2f}"
+        f"{r['AR']:6.1f}"
+        f"{r['mass']:10.3f}"
+        f"{r['cg']:10.2f}"
+        f"{r['V_end']:10.2f}"
+        f"{r['endurance']:12.1f}"
+        f"{r['n_max']:10.2f}"
+        f"{str(r['cg_ok']):>8}"
+        f"{str(r['structure_ok']):>9}"
+        f"{str(r['flight_ok']):>9}"
+        f"{str(r['feasible']):>11}"
+    )
+
+
+# ============================================================
+# BEST ENDURANCE DESIGN
+# ============================================================
+
+best_trade = max(
+    trade_results,
+    key=lambda r: r["endurance"]
+)
+
+print()
+print("BEST THEORETICAL ENDURANCE DESIGN")
+print("-"*72)
+
+print(
+    f"Wing area:           "
+    f"{best_trade['S']:.2f} m^2"
+)
+
+print(
+    f"Aspect ratio:        "
+    f"{best_trade['AR']:.1f}"
+)
+
+print(
+    f"Endurance:           "
+    f"{best_trade['endurance']:.1f} min"
+)
+
+print(
+    f"Best endurance V:    "
+    f"{best_trade['V_end']:.2f} m/s"
+)
+
+print(
+    f"Maximum load factor: "
+    f"{best_trade['n_max']:.2f}"
+)
+
+print(
+    f"Feasible:            "
+    f"{best_trade['feasible']}"
+)
+
+
+# ============================================================
+# BEST FEASIBLE ENDURANCE DESIGN
+# ============================================================
+
+feasible_results = [
+    r
+    for r in trade_results
+    if r["feasible"]
+]
+
+if len(feasible_results) > 0:
+
+    best_feasible = max(
+        feasible_results,
+        key=lambda r: r["endurance"]
+    )
+
+    print()
+    print("BEST FEASIBLE ENDURANCE DESIGN")
+    print("-"*72)
+
+    print(
+        f"Wing area:           "
+        f"{best_feasible['S']:.2f} m^2"
+    )
+
+    print(
+        f"Aspect ratio:        "
+        f"{best_feasible['AR']:.1f}"
+    )
+
+    print(
+        f"Endurance:           "
+        f"{best_feasible['endurance']:.1f} min"
+    )
+
+    print(
+        f"Maximum load factor: "
+        f"{best_feasible['n_max']:.2f}"
+    )
+
+else:
+
+    print()
+    print(
+        "No design satisfies all "
+        "CG, structural, and flight feasibility checks."
+    )
+
+
+# ============================================================
+# RESTORE BASELINE DESIGN
+# ============================================================
+
+plane.despmtr[
+    "wing_area"
+].value = 0.60
+
+plane.despmtr[
+    "wing_AR"
+].value = 8.0

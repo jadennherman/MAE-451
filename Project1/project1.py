@@ -1,52 +1,26 @@
 from pathlib import Path
 import shutil
+import os
 
 import numpy as np
+import matplotlib.pyplot as plt
 import pyCAPS
-
 
 # ============================================================
 # MAE 451 PROJECT 1
-# STEP 3 + STEP 4
-#
-# Geometry source of truth:
-#     aircraft.csm
-#
-# Python handles:
-#     - component masses
-#     - foam mass
-#     - foam displacement
-#     - aircraft CG
-#     - CG requirement
-#     - recommended wing position
-# ============================================================
-
-
-# ============================================================
-# FILE LOCATIONS
 # ============================================================
 
 PROJECT_DIR = Path(__file__).resolve().parent
-
 CSM_FILE = PROJECT_DIR / "aircraft.csm"
-
 CAPS_RUN_DIR = PROJECT_DIR / "caps_run"
 
+FIGURE_DIR = PROJECT_DIR / "figures"
+FIGURE_DIR.mkdir(exist_ok=True)
 
-if not CSM_FILE.exists():
-    raise FileNotFoundError(
-        f"Could not find aircraft.csm at:\n{CSM_FILE}"
-    )
+os.chdir(PROJECT_DIR)
 
-
-# Delete old pyCAPS working directory so script can be rerun cleanly
 if CAPS_RUN_DIR.exists():
     shutil.rmtree(CAPS_RUN_DIR)
-
-
-# ============================================================
-# LOAD OPENCSM MODEL THROUGH pyCAPS
-# ============================================================
 
 caps_problem = pyCAPS.Problem(
     problemName=str(CAPS_RUN_DIR),
@@ -63,578 +37,1239 @@ plane = caps_problem.geometry
 
 g = 9.80665
 
-rho_foam = 30.0  # kg/m^3
+rho_sl = 1.225        # kg/m^3
+mu_sl = 1.789e-5      # kg/(m*s)
 
+rho_foam = 30.0       # kg/m^3
 
-# ============================================================
-# HARDWARE MASSES
-# kg
-# ============================================================
-
+# Hardware masses
 motor_mass = 0.080
 prop_mass = 0.0190
-
 esc_mass = 0.082
 battery_mass = 0.348
 receiver_mass = 0.0145
-
 servo_mass = 0.0166
+
+# Aerodynamic assumptions
+oswald_efficiency = 0.80
+
+# Simplified profile-drag assumptions
+# Replace later with XFOIL/AirfoilTools data if desired
+cd_wing_profile = 0.010
+cd_tail_profile = 0.015
 
 
 # ============================================================
-# HELPER FUNCTIONS
+# HELPERS
 # ============================================================
 
 def despmtr(name):
-    """Return an OpenCSM design parameter."""
     return plane.despmtr[name].value
 
 
 def outpmtr(name):
-    """Return an OpenCSM output parameter."""
     return plane.outpmtr[name].value
 
 
-def add_part(parts, name, mass, xcg):
-    """
-    Add one mass contribution to the CG table.
-    mass may be negative for displaced foam.
-    """
-    parts.append(
-        {
-            "name": name,
-            "mass": float(mass),
-            "xcg": float(xcg),
-            "moment": float(mass * xcg),
-        }
+# ============================================================
+# WEIGHTS MODEL
+# ============================================================
+
+def weights_model():
+
+    # Geometry
+    wing_x = despmtr("wing_x")
+    wing_chord = outpmtr("wing_chord")
+
+    # Foam geometry
+    nose_volume = outpmtr("noseV")
+    nose_xcg = outpmtr("nosecg")
+
+    fuse_volume = outpmtr("fuseV")
+    fuse_xcg = outpmtr("fusecg")
+
+    wing_volume = outpmtr("wingV")
+    wing_xcg = outpmtr("wingcg")
+
+    htail_volume = outpmtr("htailV")
+    htail_xcg = outpmtr("htailcg")
+
+    vtail_volume = outpmtr("vtailV")
+    vtail_xcg = outpmtr("vtailcg")
+
+    # Hardware locations
+    motor_xcg = outpmtr("motorcg")
+    prop_xcg = outpmtr("propcg")
+
+    esc_xcg = outpmtr("esccg")
+    battery_xcg = outpmtr("battcg")
+    receiver_xcg = outpmtr("rxcg")
+
+    ail_left_xcg = outpmtr("ail_left_cg")
+    ail_right_xcg = outpmtr("ail_right_cg")
+    elevator_xcg = outpmtr("elev_cg")
+    rudder_xcg = outpmtr("rud_cg")
+
+    # Hardware volumes
+    esc_volume = outpmtr("escV")
+    battery_volume = outpmtr("battV")
+    receiver_volume = outpmtr("rxV")
+    servo_volume = outpmtr("servoV")
+
+    parts = []
+
+    def add(name, mass, x):
+        parts.append((name, mass, x))
+
+    # Foam
+    add("Nose foam", rho_foam*nose_volume, nose_xcg)
+    add("Fuselage foam", rho_foam*fuse_volume, fuse_xcg)
+    add("Main wing foam", rho_foam*wing_volume, wing_xcg)
+    add("Horizontal tail foam", rho_foam*htail_volume, htail_xcg)
+    add("Vertical tail foam", rho_foam*vtail_volume, vtail_xcg)
+
+    # Hardware
+    add("Motor", motor_mass, motor_xcg)
+    add("Propeller", prop_mass, prop_xcg)
+    add("ESC", esc_mass, esc_xcg)
+    add("Battery", battery_mass, battery_xcg)
+    add("Receiver", receiver_mass, receiver_xcg)
+
+    add("Left aileron servo", servo_mass, ail_left_xcg)
+    add("Right aileron servo", servo_mass, ail_right_xcg)
+    add("Elevator servo", servo_mass, elevator_xcg)
+    add("Rudder servo", servo_mass, rudder_xcg)
+
+    # Displaced foam
+    add("ESC foam removed", -rho_foam*esc_volume, esc_xcg)
+    add("Battery foam removed", -rho_foam*battery_volume, battery_xcg)
+    add("Receiver foam removed", -rho_foam*receiver_volume, receiver_xcg)
+
+    add("Left servo foam removed",
+        -rho_foam*servo_volume, ail_left_xcg)
+
+    add("Right servo foam removed",
+        -rho_foam*servo_volume, ail_right_xcg)
+
+    add("Elevator foam removed",
+        -rho_foam*servo_volume, elevator_xcg)
+
+    add("Rudder foam removed",
+        -rho_foam*servo_volume, rudder_xcg)
+
+    total_mass = sum(p[1] for p in parts)
+
+    total_moment = sum(
+        p[1] * p[2]
+        for p in parts
+    )
+
+    xcg = total_moment / total_mass
+
+    weight = total_mass * g
+
+    cg_fraction = (
+        (xcg - wing_x)
+        / wing_chord
+    )
+
+    return {
+        "mass": total_mass,
+        "weight": weight,
+        "xcg": xcg,
+        "cg_fraction": cg_fraction,
+        "cg_percent": 100*cg_fraction,
+        "parts": parts
+    }
+
+
+# ============================================================
+# AERODYNAMIC MODEL
+# STEP 5
+# ============================================================
+
+def aero_model(V, weight, rho=rho_sl):
+
+    V = np.asarray(V)
+
+    # Aircraft geometry
+    S = despmtr("wing_area")
+    AR = despmtr("wing_AR")
+
+    fus_length = despmtr("fus_length")
+    fus_diameter = outpmtr("fus_diameter")
+
+    ht_area = outpmtr("ht_area")
+    vt_area = outpmtr("vt_area")
+
+    # Dynamic pressure
+    q = 0.5 * rho * V**2
+
+    # --------------------------------------------------------
+    # LIFT
+    #
+    # Steady level flight:
+    # L = W
+    #
+    # L = q S CL
+    # --------------------------------------------------------
+
+    CL = weight / (q*S)
+
+    lift = q*S*CL
+
+    # --------------------------------------------------------
+    # WING PROFILE DRAG
+    #
+    # Assignment says wing profile coefficients may be
+    # represented by NACA 2412 data.
+    #
+    # For this preliminary model, use constant profile CD.
+    # --------------------------------------------------------
+
+    CD_wing = (
+        cd_wing_profile
+        * np.ones_like(V)
+    )
+
+    # --------------------------------------------------------
+    # FUSELAGE DRAG
+    #
+    # Lecture 6:
+    #
+    # CD_fuse =
+    # (L*d/S) [
+    # 0.25(L/d)^-0.9
+    # + 0.05(L/d)^0.57
+    # ]
+    # --------------------------------------------------------
+
+    fineness_ratio = (
+        fus_length
+        / fus_diameter
+    )
+
+    CD_fuse = (
+        fus_length
+        * fus_diameter
+        / S
+    ) * (
+        0.25
+        * fineness_ratio**(-0.9)
+        +
+        0.05
+        * fineness_ratio**0.57
+    )
+
+    CD_fuse = (
+        CD_fuse
+        * np.ones_like(V)
+    )
+
+    # --------------------------------------------------------
+    # TAIL PROFILE DRAG
+    #
+    # Tail CL assumed zero per assignment.
+    # Tail coefficients referenced to wing area.
+    # --------------------------------------------------------
+
+    CD_ht = (
+        cd_tail_profile
+        * ht_area
+        / S
+    )
+
+    CD_vt = (
+        cd_tail_profile
+        * vt_area
+        / S
+    )
+
+    CD_ht = (
+        CD_ht
+        * np.ones_like(V)
+    )
+
+    CD_vt = (
+        CD_vt
+        * np.ones_like(V)
+    )
+
+    # --------------------------------------------------------
+    # INDUCED DRAG
+    # --------------------------------------------------------
+
+    CD_induced = (
+        CL**2
+        /
+        (
+            np.pi
+            * oswald_efficiency
+            * AR
+        )
+    )
+
+    # --------------------------------------------------------
+    # TOTAL DRAG
+    # --------------------------------------------------------
+
+    CD_total = (
+        CD_wing
+        + CD_fuse
+        + CD_ht
+        + CD_vt
+        + CD_induced
+    )
+
+    drag = (
+        q
+        * S
+        * CD_total
+    )
+
+    return {
+        "V": V,
+        "q": q,
+        "CL": CL,
+        "lift": lift,
+
+        "CD_wing": CD_wing,
+        "CD_fuse": CD_fuse,
+        "CD_ht": CD_ht,
+        "CD_vt": CD_vt,
+        "CD_induced": CD_induced,
+
+        "CD_total": CD_total,
+        "drag": drag
+    }
+
+
+# ============================================================
+# PROPULSION MODEL
+# ============================================================
+
+def propulsion_model(
+    V,
+    throttle,
+    rho=rho_sl
+):
+
+    V = np.asarray(V)
+
+    # Assignment thrust model
+    thrust = (
+        15.0
+        * (rho/rho_sl)
+        * (1.0 - V/50.0)
+        * throttle
+    )
+
+    # No negative thrust past model limit
+    thrust = np.maximum(
+        thrust,
+        0.0
+    )
+
+    efficiency = 0.70
+
+    return {
+        "thrust": thrust,
+        "efficiency": efficiency
+    }
+
+
+# ============================================================
+# BASELINE AIRCRAFT ANALYSIS
+# ============================================================
+
+weights = weights_model()
+
+print()
+print("="*72)
+print("BASELINE AIRCRAFT")
+print("="*72)
+
+print(
+    f"Mass:             "
+    f"{weights['mass']:.4f} kg"
+)
+
+print(
+    f"Weight:           "
+    f"{weights['weight']:.4f} N"
+)
+
+print(
+    f"CG from nose:     "
+    f"{weights['xcg']:.4f} m"
+)
+
+print(
+    f"CG location:      "
+    f"{weights['cg_percent']:.2f}% chord"
+)
+
+
+# ============================================================
+# STEP 5 CHECK AT ONE VELOCITY
+# ============================================================
+
+V_test = 20.0
+
+aero_test = aero_model(
+    V_test,
+    weights["weight"]
+)
+
+print()
+print("="*72)
+print("STEP 5 - AERODYNAMIC MODEL CHECK AT 20 m/s")
+print("="*72)
+
+print(
+    f"CL:               "
+    f"{float(aero_test['CL']):.4f}"
+)
+
+print(
+    f"CD wing profile:  "
+    f"{float(aero_test['CD_wing']):.4f}"
+)
+
+print(
+    f"CD fuselage:      "
+    f"{float(aero_test['CD_fuse']):.4f}"
+)
+
+print(
+    f"CD horizontal:    "
+    f"{float(aero_test['CD_ht']):.4f}"
+)
+
+print(
+    f"CD vertical:      "
+    f"{float(aero_test['CD_vt']):.4f}"
+)
+
+print(
+    f"CD induced:       "
+    f"{float(aero_test['CD_induced']):.4f}"
+)
+
+print(
+    f"CD total:         "
+    f"{float(aero_test['CD_total']):.4f}"
+)
+
+print(
+    f"Drag:             "
+    f"{float(aero_test['drag']):.4f} N"
+)
+
+
+# ============================================================
+# STEP 6
+# DRAG VS VELOCITY + THRUST CURVES
+# ============================================================
+
+V = np.linspace(
+    4,
+    49.0,
+    400
+)
+
+aero = aero_model(
+    V,
+    weights["weight"]
+)
+
+T20 = propulsion_model(
+    V,
+    0.20
+)["thrust"]
+
+T50 = propulsion_model(
+    V,
+    0.50
+)["thrust"]
+
+T100 = propulsion_model(
+    V,
+    1.00
+)["thrust"]
+
+
+plt.figure(figsize=(8, 5))
+
+plt.plot(
+    V,
+    aero["drag"],
+    label="Drag Required"
+)
+
+plt.plot(
+    V,
+    T20,
+    label="20% Throttle"
+)
+
+plt.plot(
+    V,
+    T50,
+    label="50% Throttle"
+)
+
+plt.plot(
+    V,
+    T100,
+    label="100% Throttle"
+)
+
+plt.xlabel(
+    "Velocity (m/s)"
+)
+
+plt.ylabel(
+    "Force (N)"
+)
+
+plt.xlim(4, 49)
+
+plt.title(
+    "Drag Required and Thrust Available at Sea Level"
+)
+
+plt.grid(True)
+
+plt.legend()
+
+plt.tight_layout()
+
+plt.savefig(
+    FIGURE_DIR / "step6_drag_thrust.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.close()
+
+# ============================================================
+# STEP 7 - PERFORMANCE
+# ============================================================
+
+# ------------------------------------------------------------
+# BATTERY / AIRCRAFT ASSUMPTIONS
+# ------------------------------------------------------------
+
+CL_max = 1.50
+
+battery_voltage = 14.8       # V, nominal 4S LiPo
+battery_capacity_Ah = 3.3    # Ah
+
+battery_energy_Wh = (
+    battery_voltage
+    * battery_capacity_Ah
+)
+
+battery_energy_J = (
+    battery_energy_Wh
+    * 3600.0
+)
+
+powertrain_efficiency = 0.70
+
+
+# ============================================================
+# STANDARD ATMOSPHERE
+# ============================================================
+
+def atmosphere(h):
+
+    T0 = 288.15
+    p0 = 101325.0
+    rho0 = 1.225
+
+    R = 287.05
+    g0 = 9.80665
+
+    # Troposphere
+    if h <= 11000.0:
+
+        L = 0.0065
+
+        T = T0 - L*h
+
+        p = (
+            p0
+            * (T/T0)**(g0/(R*L))
+        )
+
+    # Lower stratosphere
+    else:
+
+        T11 = 216.65
+
+        p11 = (
+            p0
+            * (T11/T0)**(g0/(R*0.0065))
+        )
+
+        T = T11
+
+        p = (
+            p11
+            * np.exp(
+                -g0*(h-11000.0)
+                /(R*T)
+            )
+        )
+
+    rho = p/(R*T)
+
+    return rho
+
+
+# ============================================================
+# SEA-LEVEL PERFORMANCE GRID
+# ============================================================
+
+W = weights["weight"]
+S = despmtr("wing_area")
+
+V_stall_SL = np.sqrt(
+    2.0*W
+    /
+    (
+        rho_sl
+        * S
+        * CL_max
+    )
+)
+
+V_perf = np.linspace(
+    V_stall_SL,
+    49.0,
+    3000
+)
+
+aero_perf = aero_model(
+    V_perf,
+    W,
+    rho_sl
+)
+
+D_perf = aero_perf["drag"]
+
+P_flight = (
+    D_perf
+    * V_perf
+)
+
+P_battery = (
+    P_flight
+    / powertrain_efficiency
+)
+
+
+# ============================================================
+# BEST RANGE
+#
+# Electric aircraft:
+#
+# Range = eta * E_battery / D
+#
+# therefore maximum range occurs at minimum drag.
+# ============================================================
+
+i_range = np.argmin(
+    D_perf
+)
+
+V_best_range = (
+    V_perf[i_range]
+)
+
+D_best_range = (
+    D_perf[i_range]
+)
+
+best_range = (
+    powertrain_efficiency
+    * battery_energy_J
+    / D_best_range
+)
+
+
+# ============================================================
+# BEST ENDURANCE
+#
+# Endurance = eta * E_battery / (D*V)
+#
+# therefore maximize endurance by minimizing required power.
+# ============================================================
+
+i_endurance = np.argmin(
+    P_flight
+)
+
+V_best_endurance = (
+    V_perf[i_endurance]
+)
+
+P_min_flight = (
+    P_flight[i_endurance]
+)
+
+P_min_battery = (
+    P_battery[i_endurance]
+)
+
+best_endurance_sec = (
+    battery_energy_J
+    / P_min_battery
+)
+
+best_endurance_min = (
+    best_endurance_sec
+    / 60.0
+)
+
+
+# ============================================================
+# CEILING
+#
+# Rate of climb:
+#
+# ROC = excess power / W
+#     = (T-D)*V/W
+#
+# Absolute ceiling:
+# max ROC = 0
+#
+# Service ceiling:
+# max ROC = 100 ft/min = 0.508 m/s
+# ============================================================
+
+altitudes = np.linspace(
+    0.0,
+    20000.0,
+    1001
+)
+
+max_ROC = np.zeros_like(
+    altitudes
+)
+
+best_climb_speed = np.zeros_like(
+    altitudes
+)
+
+for i, h in enumerate(altitudes):
+
+    rho = atmosphere(h)
+
+    V_stall_h = np.sqrt(
+        2.0*W
+        /
+        (
+            rho
+            * S
+            * CL_max
+        )
+    )
+
+    V_h = np.linspace(
+        V_stall_h,
+        49.0,
+        800
+    )
+
+    aero_h = aero_model(
+        V_h,
+        W,
+        rho
+    )
+
+    thrust_h = propulsion_model(
+        V_h,
+        1.0,
+        rho
+    )["thrust"]
+
+    ROC = (
+        (thrust_h-aero_h["drag"])
+        * V_h
+        / W
+    )
+
+    i_max = np.argmax(
+        ROC
+    )
+
+    max_ROC[i] = (
+        ROC[i_max]
+    )
+
+    best_climb_speed[i] = (
+        V_h[i_max]
     )
 
 
-# ============================================================
-# READ CURRENT DESIGN PARAMETERS FROM aircraft.csm
-# ============================================================
-
-wing_area = despmtr("wing_area")
-wing_AR = despmtr("wing_AR")
-
-fus_length = despmtr("fus_length")
-fus_FR = despmtr("fus_FR")
-
-wing_x = despmtr("wing_x")
-
-
-# ============================================================
-# READ DERIVED GEOMETRY DIRECTLY FROM aircraft.csm
-# ============================================================
-
-wing_span = outpmtr("wing_span")
-wing_chord = outpmtr("wing_chord")
-
-fus_diameter = outpmtr("fus_diameter")
-fus_radius = outpmtr("fus_radius")
-
-ht_area = outpmtr("ht_area")
-ht_span = outpmtr("ht_span")
-ht_chord = outpmtr("ht_chord")
-
-vt_area = outpmtr("vt_area")
-vt_height = outpmtr("vt_height")
-
-
-# ============================================================
-# READ ACTUAL FOAM BODY VOLUMES + CENTROIDS FROM OPENCSM
-# ============================================================
-
-nose_volume = outpmtr("noseV")
-nose_xcg = outpmtr("nosecg")
-
-fuse_volume = outpmtr("fuseV")
-fuse_xcg = outpmtr("fusecg")
-
-wing_volume = outpmtr("wingV")
-wing_xcg = outpmtr("wingcg")
-
-htail_volume = outpmtr("htailV")
-htail_xcg = outpmtr("htailcg")
-
-vtail_volume = outpmtr("vtailV")
-vtail_xcg = outpmtr("vtailcg")
-
-
-# ============================================================
-# FOAM MASSES
-# ============================================================
-
-nose_mass = rho_foam * nose_volume
-fuse_mass = rho_foam * fuse_volume
-
-wing_mass = rho_foam * wing_volume
-
-htail_mass = rho_foam * htail_volume
-vtail_mass = rho_foam * vtail_volume
-
-
-# ============================================================
-# READ ACTUAL COMPONENT LOCATIONS FROM OPENCSM
-# ============================================================
-
-motor_xcg = outpmtr("motorcg")
-prop_xcg = outpmtr("propcg")
-
-esc_xcg = outpmtr("esccg")
-battery_xcg = outpmtr("battcg")
-receiver_xcg = outpmtr("rxcg")
-
-ail_left_xcg = outpmtr("ail_left_cg")
-ail_right_xcg = outpmtr("ail_right_cg")
-
-elevator_xcg = outpmtr("elev_cg")
-rudder_xcg = outpmtr("rud_cg")
-
-
-# ============================================================
-# ACTUAL COMPONENT VOLUMES FROM OPENCSM
-# Used to calculate displaced foam
-# ============================================================
-
-esc_volume = outpmtr("escV")
-battery_volume = outpmtr("battV")
-receiver_volume = outpmtr("rxV")
-
-servo_volume = outpmtr("servoV")
-
-
-# ============================================================
-# FOAM DISPLACEMENT
-# ============================================================
-
-esc_foam_removed = rho_foam * esc_volume
-battery_foam_removed = rho_foam * battery_volume
-receiver_foam_removed = rho_foam * receiver_volume
-
-servo_foam_removed = rho_foam * servo_volume
-
-
-# ============================================================
-# BUILD COMPONENT MASS TABLE
-# ============================================================
-
-parts = []
-
-
-# -------------------------
-# Foam
-# -------------------------
-
-add_part(
-    parts,
-    "Nose foam",
-    nose_mass,
-    nose_xcg
-)
-
-add_part(
-    parts,
-    "Fuselage foam",
-    fuse_mass,
-    fuse_xcg
-)
-
-add_part(
-    parts,
-    "Main wing foam",
-    wing_mass,
-    wing_xcg
-)
-
-add_part(
-    parts,
-    "Horizontal tail foam",
-    htail_mass,
-    htail_xcg
-)
-
-add_part(
-    parts,
-    "Vertical tail foam",
-    vtail_mass,
-    vtail_xcg
-)
-
-
-# -------------------------
-# Hardware
-# -------------------------
-
-add_part(
-    parts,
-    "Motor",
-    motor_mass,
-    motor_xcg
-)
-
-add_part(
-    parts,
-    "Propeller",
-    prop_mass,
-    prop_xcg
-)
-
-add_part(
-    parts,
-    "ESC",
-    esc_mass,
-    esc_xcg
-)
-
-add_part(
-    parts,
-    "Battery",
-    battery_mass,
-    battery_xcg
-)
-
-add_part(
-    parts,
-    "Receiver",
-    receiver_mass,
-    receiver_xcg
-)
-
-add_part(
-    parts,
-    "Left aileron servo",
-    servo_mass,
-    ail_left_xcg
-)
-
-add_part(
-    parts,
-    "Right aileron servo",
-    servo_mass,
-    ail_right_xcg
-)
-
-add_part(
-    parts,
-    "Elevator servo",
-    servo_mass,
-    elevator_xcg
-)
-
-add_part(
-    parts,
-    "Rudder servo",
-    servo_mass,
-    rudder_xcg
-)
-
-
-# -------------------------
-# Foam displaced by electronics
-# -------------------------
-
-add_part(
-    parts,
-    "ESC foam removed",
-    -esc_foam_removed,
-    esc_xcg
-)
-
-add_part(
-    parts,
-    "Battery foam removed",
-    -battery_foam_removed,
-    battery_xcg
-)
-
-add_part(
-    parts,
-    "Receiver foam removed",
-    -receiver_foam_removed,
-    receiver_xcg
-)
-
-add_part(
-    parts,
-    "Left aileron foam removed",
-    -servo_foam_removed,
-    ail_left_xcg
-)
-
-add_part(
-    parts,
-    "Right aileron foam removed",
-    -servo_foam_removed,
-    ail_right_xcg
-)
-
-add_part(
-    parts,
-    "Elevator foam removed",
-    -servo_foam_removed,
-    elevator_xcg
-)
-
-add_part(
-    parts,
-    "Rudder foam removed",
-    -servo_foam_removed,
-    rudder_xcg
-)
-
-
-# ============================================================
-# TOTAL MASS + CG
-# ============================================================
-
-total_mass = sum(
-    part["mass"]
-    for part in parts
-)
-
-total_moment = sum(
-    part["moment"]
-    for part in parts
-)
-
-aircraft_xcg = (
-    total_moment
-    / total_mass
-)
-
-aircraft_weight = (
-    total_mass
-    * g
-)
-
-
-# ============================================================
-# CG RELATIVE TO MAIN WING
-# ============================================================
-
-cg_fraction = (
-    (aircraft_xcg - wing_x)
-    / wing_chord
-)
-
-cg_percent = (
-    100.0
-    * cg_fraction
-)
-
-cg_min_x = (
-    wing_x
-    + 0.25 * wing_chord
-)
-
-cg_max_x = (
-    wing_x
-    + 0.50 * wing_chord
-)
-
-cg_pass = (
-    0.25 <= cg_fraction <= 0.50
-)
-
-
-# ============================================================
-# OUTPUT
-# ============================================================
-
-print()
-print("=" * 82)
-print("MAE 451 PROJECT 1")
-print("OPENCSM / pyCAPS WEIGHT AND CG ANALYSIS")
-print("=" * 82)
-
-
-print()
-print("GEOMETRY READ DIRECTLY FROM aircraft.csm")
-print("-" * 82)
-
-print(
-    f"Wing area:                  "
-    f"{wing_area:.6f} m^2"
-)
-
-print(
-    f"Wing aspect ratio:          "
-    f"{wing_AR:.6f}"
-)
-
-print(
-    f"Wing span:                  "
-    f"{wing_span:.6f} m"
-)
-
-print(
-    f"Wing chord:                 "
-    f"{wing_chord:.6f} m"
-)
-
-print(
-    f"Wing leading edge:          "
-    f"{wing_x:.6f} m"
-)
-
-print(
-    f"Fuselage length:            "
-    f"{fus_length:.6f} m"
-)
-
-print(
-    f"Fuselage diameter:          "
-    f"{fus_diameter:.6f} m"
-)
-
-print(
-    f"Horizontal tail area:       "
-    f"{ht_area:.6f} m^2"
-)
-
-print(
-    f"Vertical tail area:         "
-    f"{vt_area:.6f} m^2"
-)
-
-
-print()
-print("OPENCSM FOAM GEOMETRY")
-print("-" * 82)
-
-print(
-    f"{'Component':25s}"
-    f"{'Volume (m^3)':>18s}"
-    f"{'Foam Mass (kg)':>18s}"
-    f"{'x_CG (m)':>15s}"
-)
-
-print("-" * 82)
-
-foam_rows = [
-    (
-        "Nose",
-        nose_volume,
-        nose_mass,
-        nose_xcg
-    ),
-    (
-        "Fuselage",
-        fuse_volume,
-        fuse_mass,
-        fuse_xcg
-    ),
-    (
-        "Main wing",
-        wing_volume,
-        wing_mass,
-        wing_xcg
-    ),
-    (
-        "Horizontal tail",
-        htail_volume,
-        htail_mass,
-        htail_xcg
-    ),
-    (
-        "Vertical tail",
-        vtail_volume,
-        vtail_mass,
-        vtail_xcg
-    ),
-]
-
-for name, volume, mass, xcg in foam_rows:
-
-    print(
-        f"{name:25s}"
-        f"{volume:18.8f}"
-        f"{mass:18.6f}"
-        f"{xcg:15.6f}"
-    )
-
-
-print()
-print("COMPONENT MASS / MOMENT TABLE")
-print("-" * 82)
-
-print(
-    f"{'Component':32s}"
-    f"{'Mass (kg)':>14s}"
-    f"{'x_CG (m)':>14s}"
-    f"{'Moment':>16s}"
-)
-
-print("-" * 82)
-
-for part in parts:
-
-    print(
-        f"{part['name']:32s}"
-        f"{part['mass']:14.6f}"
-        f"{part['xcg']:14.6f}"
-        f"{part['moment']:16.8f}"
-    )
-
-
-print()
-print("STEP 3 - CENTER OF GRAVITY")
-print("-" * 82)
-
-print(
-    f"Aircraft CG from nose:      "
-    f"{aircraft_xcg:.6f} m"
-)
-
-print(
-    f"CG location:                "
-    f"{cg_percent:.2f}% chord"
-)
-
-print(
-    f"Allowed CG range:           "
-    f"25% to 50% chord"
-)
-
-print(
-    f"Allowed x_CG range:         "
-    f"{cg_min_x:.6f} to "
-    f"{cg_max_x:.6f} m"
-)
-
-if cg_pass:
-
-    print(
-        "CG CHECK:                   PASS"
+# Absolute ceiling
+valid_absolute = np.where(
+    max_ROC >= 0.0
+)[0]
+
+if len(valid_absolute) > 0:
+
+    absolute_ceiling = (
+        altitudes[
+            valid_absolute[-1]
+        ]
     )
 
 else:
 
-    print(
-        "CG CHECK:                   FAIL"
+    absolute_ceiling = np.nan
+
+
+# Service ceiling
+service_ROC = 0.508  # m/s = 100 ft/min
+
+valid_service = np.where(
+    max_ROC >= service_ROC
+)[0]
+
+if len(valid_service) > 0:
+
+    service_ceiling = (
+        altitudes[
+            valid_service[-1]
+        ]
     )
 
+else:
+
+    service_ceiling = np.nan
+
+
+# ============================================================
+# STALL SPEED VS BANK ANGLE
+#
+# n = 1/cos(phi)
+#
+# Vs(phi) =
+# sqrt(
+#   2 n W /
+#   rho S CLmax
+# )
+# ============================================================
+
+bank_deg = np.linspace(
+    0.0,
+    80.0,
+    161
+)
+
+bank_rad = np.deg2rad(
+    bank_deg
+)
+
+load_factor = (
+    1.0
+    / np.cos(bank_rad)
+)
+
+V_stall_bank = np.sqrt(
+    2.0
+    * load_factor
+    * W
+    /
+    (
+        rho_sl
+        * S
+        * CL_max
+    )
+)
+
+
+# ============================================================
+# DASH SPEED VS BANK ANGLE
+#
+# Level turn requires:
+#
+# L = nW
+#
+# For each bank angle, find highest velocity where
+#
+# T_available >= D_required
+# ============================================================
+
+V_dash_bank = np.full_like(
+    bank_deg,
+    np.nan
+)
+
+for i, n in enumerate(
+    load_factor
+):
+
+    V_min = (
+        V_stall_bank[i]
+    )
+
+    V_test = np.linspace(
+        V_min,
+        49.0,
+        2000
+    )
+
+    # Passing n*W makes aero_model compute
+    # lift coefficient required for the turn
+    aero_turn = aero_model(
+        V_test,
+        n*W,
+        rho_sl
+    )
+
+    T_turn = propulsion_model(
+        V_test,
+        1.0,
+        rho_sl
+    )["thrust"]
+
+    feasible = np.where(
+        T_turn
+        >= aero_turn["drag"]
+    )[0]
+
+    if len(feasible) > 0:
+
+        V_dash_bank[i] = (
+            V_test[
+                feasible[-1]
+            ]
+        )
+
+
+# ============================================================
+# MINIMUM TURN RADIUS
+#
+# R = V^2 / (g tan(phi))
+#
+# At each bank angle, use stall-limited minimum velocity.
+# Also require thrust sufficient to maintain level turn.
+# ============================================================
+
+turn_radius = np.full_like(
+    bank_deg,
+    np.nan
+)
+
+for i, phi in enumerate(
+    bank_rad
+):
+
+    if phi == 0.0:
+        continue
+
+    V_turn = (
+        V_stall_bank[i]
+    )
+
+    n = (
+        load_factor[i]
+    )
+
+    aero_turn = aero_model(
+        V_turn,
+        n*W,
+        rho_sl
+    )
+
+    thrust_turn = propulsion_model(
+        V_turn,
+        1.0,
+        rho_sl
+    )["thrust"]
+
+    # Only count sustained turns
+    if (
+        thrust_turn
+        >= aero_turn["drag"]
+    ):
+
+        turn_radius[i] = (
+            V_turn**2
+            /
+            (
+                g
+                * np.tan(phi)
+            )
+        )
+
+
+if np.any(
+    np.isfinite(turn_radius)
+):
+
+    i_min_radius = np.nanargmin(
+        turn_radius
+    )
+
+    minimum_turn_radius = (
+        turn_radius[
+            i_min_radius
+        ]
+    )
+
+    min_radius_bank = (
+        bank_deg[
+            i_min_radius
+        ]
+    )
+
+    min_radius_speed = (
+        V_stall_bank[
+            i_min_radius
+        ]
+    )
+
+else:
+
+    minimum_turn_radius = np.nan
+    min_radius_bank = np.nan
+    min_radius_speed = np.nan
+
+
+# ============================================================
+# STEP 7 OUTPUT
+# ============================================================
 
 print()
-print("STEP 4 - AIRCRAFT WEIGHT")
-print("-" * 82)
+print("="*72)
+print("STEP 7 - PERFORMANCE")
+print("="*72)
+
+print()
+print("BEST RANGE")
+print("-"*72)
 
 print(
-    f"Total aircraft mass:        "
-    f"{total_mass:.6f} kg"
+    f"Best range speed:       "
+    f"{V_best_range:.3f} m/s"
 )
 
 print(
-    f"Total aircraft weight:      "
-    f"{aircraft_weight:.6f} N"
+    f"Minimum drag:           "
+    f"{D_best_range:.3f} N"
 )
 
 print(
-    f"Total aircraft weight:      "
-    f"{total_mass * 2.2046226218:.4f} lbm"
+    f"Best range:             "
+    f"{best_range/1000:.3f} km"
 )
 
 
 print()
-print("=" * 82)
+print("BEST ENDURANCE")
+print("-"*72)
+
+print(
+    f"Best endurance speed:   "
+    f"{V_best_endurance:.3f} m/s"
+)
+
+print(
+    f"Minimum flight power:   "
+    f"{P_min_flight:.3f} W"
+)
+
+print(
+    f"Battery power required: "
+    f"{P_min_battery:.3f} W"
+)
+
+print(
+    f"Best endurance:         "
+    f"{best_endurance_min:.2f} min"
+)
+
+
+print()
+print("CEILINGS")
+print("-"*72)
+
+print(
+    f"Service ceiling:        "
+    f"{service_ceiling:.0f} m"
+)
+
+print(
+    f"Absolute ceiling:       "
+    f"{absolute_ceiling:.0f} m"
+)
+
+
+print()
+print("STALL")
+print("-"*72)
+
+print(
+    f"Sea-level stall speed:  "
+    f"{V_stall_SL:.3f} m/s"
+)
+
+
+print()
+print("MINIMUM TURN RADIUS")
+print("-"*72)
+
+print(
+    f"Minimum turn radius:    "
+    f"{minimum_turn_radius:.3f} m"
+)
+
+print(
+    f"Bank angle:             "
+    f"{min_radius_bank:.1f} deg"
+)
+
+print(
+    f"Turn speed:             "
+    f"{min_radius_speed:.3f} m/s"
+)
+
+
+# ============================================================
+# STEP 7 FIGURE 1
+# STALL SPEED VS BANK ANGLE
+# ============================================================
+
+plt.figure(
+    figsize=(7, 5)
+)
+
+plt.plot(
+    bank_deg,
+    V_stall_bank
+)
+
+plt.xlabel(
+    "Bank Angle (deg)"
+)
+
+plt.ylabel(
+    "Stall Speed (m/s)"
+)
+
+plt.title(
+    "Stall Speed vs Bank Angle"
+)
+
+plt.grid(True)
+
+plt.tight_layout()
+
+plt.savefig(
+    FIGURE_DIR
+    / "step7_stall_speed_vs_bank.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.close()
+
+
+# ============================================================
+# STEP 7 FIGURE 2
+# DASH SPEED VS BANK ANGLE
+# ============================================================
+
+plt.figure(
+    figsize=(7, 5)
+)
+
+plt.plot(
+    bank_deg,
+    V_dash_bank
+)
+
+plt.xlabel(
+    "Bank Angle (deg)"
+)
+
+plt.ylabel(
+    "Dash Speed (m/s)"
+)
+
+plt.title(
+    "Dash Speed vs Bank Angle"
+)
+
+plt.grid(True)
+
+plt.tight_layout()
+
+plt.savefig(
+    FIGURE_DIR
+    / "step7_dash_speed_vs_bank.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.close()
+
+
+# ============================================================
+# STEP 7 FIGURE 3
+# MAXIMUM RATE OF CLIMB VS ALTITUDE
+# ============================================================
+
+plt.figure(
+    figsize=(7, 5)
+)
+
+plt.plot(
+    altitudes,
+    max_ROC
+)
+
+plt.axhline(
+    0.508,
+    linestyle="--",
+    label="Service Ceiling Criterion"
+)
+
+plt.axhline(
+    0.0,
+    linestyle="--",
+    label="Absolute Ceiling Criterion"
+)
+
+plt.xlabel(
+    "Altitude (m)"
+)
+
+plt.ylabel(
+    "Maximum Rate of Climb (m/s)"
+)
+
+plt.title(
+    "Maximum Rate of Climb vs Altitude"
+)
+
+plt.grid(True)
+
+plt.legend()
+
+plt.tight_layout()
+
+plt.savefig(
+    FIGURE_DIR
+    / "step7_ceiling.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.close()
